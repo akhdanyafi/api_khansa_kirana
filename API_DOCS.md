@@ -751,16 +751,23 @@ Hapus file yang sudah diupload.
 
 ---
 
-## Setup HTTPS (SSL)
+## HTTPS & Deployment
 
-Untuk mengaktifkan HTTPS pada domain `api.khansakirana.my.id`, install Certbot:
+HTTPS ditangani oleh **Cloudflare Tunnel** — tidak perlu SSL certificate manual. Seluruh traffic dari `https://api.khansakirana.my.id` diteruskan secara aman melalui Cloudflare ke server lokal.
 
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d api.khansakirana.my.id
+```
+Internet → Cloudflare (HTTPS/TLS) → cloudflared tunnel → uvicorn :8001
 ```
 
-Certbot akan otomatis mengupdate konfigurasi Nginx dan membuat sertifikat SSL gratis via Let's Encrypt.
+Service tunnel berjalan otomatis saat boot:
+
+```bash
+# Cek status tunnel
+sudo systemctl status cloudflared-khansa-api
+
+# Lihat log tunnel
+sudo journalctl -u cloudflared-khansa-api -f
+```
 
 ---
 
