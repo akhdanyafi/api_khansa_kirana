@@ -382,13 +382,14 @@ class StoreProfileUpdateRequest(BaseModel):
     facebook_url: str | None = None
     tiktok_url: str | None = None
     operational_hours: str | None = None
+    hero_images: str | None = None
 
 
 @app.get("/store-profile")
 def get_store_profile() -> dict[str, Any] | None:
     row = fetch_one(
         "SELECT id, store_name, logo_url, address, gmaps_link, latitude, longitude, phone, whatsapp, "
-        "instagram_url, facebook_url, tiktok_url, operational_hours, created_at, updated_at "
+        "instagram_url, facebook_url, tiktok_url, operational_hours, hero_images, created_at, updated_at "
         "FROM store_profile ORDER BY created_at ASC LIMIT 1"
     )
     if not row:
@@ -418,6 +419,7 @@ def update_store_profile(
         "facebook_url",
         "tiktok_url",
         "operational_hours",
+        "hero_images",
     ]:
         value = getattr(payload, column)
         if value is not None:
@@ -451,6 +453,7 @@ class ProductCreateRequest(BaseModel):
     province: str | None = ""
     traditional_name: str | None = None
     is_available: bool = True
+    show_in_gallery: bool = False
 
 
 class ProductUpdateRequest(BaseModel):
@@ -462,6 +465,54 @@ class ProductUpdateRequest(BaseModel):
     province: str | None = None
     traditional_name: str | None = None
     is_available: bool | None = None
+    show_in_gallery: bool | None = None
+
+
+def _load_product_images_map(product_ids: list[str]) -> dict[str, list[str]]:
+    if not product_ids:
+        return {}
+
+    try:
+        placeholders = ", ".join(["%s"] * len(product_ids))
+        rows = fetch_all(
+            "SELECT product_id, image_url FROM product_images "
+            f"WHERE product_id IN ({placeholders}) "
+            "ORDER BY sort_order ASC, created_at ASC",
+            tuple(product_ids),
+        )
+    except Exception:
+        return {}
+
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        product_id = row.get("product_id")
+        image_url = (row.get("image_url") or "").strip()
+        if not product_id or not image_url:
+            continue
+        grouped.setdefault(product_id, []).append(image_url)
+    return grouped
+
+
+def _attach_product_images(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not products:
+        return products
+
+    product_ids = [str(product.get("id")) for product in products if product.get("id")]
+    image_map = _load_product_images_map(product_ids)
+
+    for product in products:
+        product_id = str(product.get("id") or "")
+        images = image_map.get(product_id, [])
+        primary = str(product.get("image_url") or "").strip()
+
+        if primary and primary not in images:
+            images = [primary, *images]
+
+        product["images"] = images
+        if images and not primary:
+            product["image_url"] = images[0]
+
+    return products
 
 
 @app.get("/products")
@@ -469,12 +520,13 @@ def list_products(
     category: str | None = None,
     province: str | None = None,
     is_available: bool | None = None,
+    show_in_gallery: bool | None = None,
     order_by: str = "created_at",
     ascending: bool = False,
 ) -> list[dict[str, Any]]:
     sql = (
         "SELECT id, name, description, image_url, price, category, province, traditional_name, "
-        "is_available, created_at, updated_at FROM products WHERE 1=1"
+        "is_available, show_in_gallery, created_at, updated_at FROM products WHERE 1=1"
     )
     params: list[Any] = []
 
@@ -490,24 +542,32 @@ def list_products(
         sql += " AND is_available=%s"
         params.append(_bool_to_int(is_available))
 
+    if show_in_gallery is not None:
+        sql += " AND show_in_gallery=%s"
+        params.append(_bool_to_int(show_in_gallery))
+
     order = _safe_order_by(order_by, {"created_at", "updated_at", "name", "price"}, "created_at")
     direction = "ASC" if ascending else "DESC"
     sql += f" ORDER BY {order} {direction}"
 
     rows = fetch_all(sql, tuple(params))
-    return normalize_rows(rows, bool_fields={"is_available"})
+    products = normalize_rows(rows, bool_fields={"is_available", "show_in_gallery"})
+    return _attach_product_images(products)
 
 
 @app.get("/products/{product_id}")
 def get_product(product_id: str) -> dict[str, Any]:
     row = fetch_one(
         "SELECT id, name, description, image_url, price, category, province, traditional_name, "
-        "is_available, created_at, updated_at FROM products WHERE id=%s",
+        "is_available, show_in_gallery, created_at, updated_at FROM products WHERE id=%s",
         (product_id,),
     )
     if not row:
         raise HTTPException(status_code=404, detail="Product not found")
-    return normalize_row(row, bool_fields={"is_available"})
+    products = _attach_product_images(
+        [normalize_row(row, bool_fields={"is_available", "show_in_gallery"})]
+    )
+    return products[0]
 
 
 @app.post("/products")
@@ -518,8 +578,8 @@ def create_product(
     product_id = str(uuid.uuid4())
 
     execute(
-        "INSERT INTO products (id, name, description, image_url, price, category, province, traditional_name, is_available, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
+        "INSERT INTO products (id, name, description, image_url, price, category, province, traditional_name, is_available, show_in_gallery, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
         (
             product_id,
             payload.name,
@@ -530,18 +590,22 @@ def create_product(
             payload.province or "",
             payload.traditional_name,
             _bool_to_int(payload.is_available),
+            _bool_to_int(payload.show_in_gallery),
         ),
     )
 
     row = fetch_one(
         "SELECT id, name, description, image_url, price, category, province, traditional_name, "
-        "is_available, created_at, updated_at FROM products WHERE id=%s",
+        "is_available, show_in_gallery, created_at, updated_at FROM products WHERE id=%s",
         (product_id,),
     )
     if not row:
         raise HTTPException(status_code=500, detail="Product created but cannot be loaded")
 
-    return normalize_row(row, bool_fields={"is_available"})
+    products = _attach_product_images(
+        [normalize_row(row, bool_fields={"is_available", "show_in_gallery"})]
+    )
+    return products[0]
 
 
 @app.put("/products/{product_id}")
@@ -572,6 +636,10 @@ def update_product(
         fields.append("is_available=%s")
         params.append(_bool_to_int(payload.is_available))
 
+    if payload.show_in_gallery is not None:
+        fields.append("show_in_gallery=%s")
+        params.append(_bool_to_int(payload.show_in_gallery))
+
     if not fields:
         return {"ok": True}
 
@@ -600,12 +668,13 @@ def search_products(q: str = Query(min_length=1)) -> list[dict[str, Any]]:
     like = f"%{q}%"
     rows = fetch_all(
         "SELECT id, name, description, image_url, price, category, province, traditional_name, "
-        "is_available, created_at, updated_at FROM products "
+        "is_available, show_in_gallery, created_at, updated_at FROM products "
         "WHERE is_available=1 AND (name LIKE %s OR description LIKE %s OR traditional_name LIKE %s) "
         "ORDER BY name ASC",
         (like, like, like),
     )
-    return normalize_rows(rows, bool_fields={"is_available"})
+    products = normalize_rows(rows, bool_fields={"is_available", "show_in_gallery"})
+    return _attach_product_images(products)
 
 
 @app.get("/products/categories")

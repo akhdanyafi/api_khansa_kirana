@@ -1,9 +1,9 @@
 # Khansa Collection API — Dokumentasi
 
-**Base URL:** `https://api.khansakirana.my.id`
+**Base URL:** `https://api-khansakirana.widiyanto.web.id`
 
-> Interactive docs (Swagger UI): `https://api.khansakirana.my.id/docs`  
-> ReDoc: `https://api.khansakirana.my.id/redoc`
+> Interactive docs (Swagger UI): `https://api-khansakirana.widiyanto.web.id/docs`  
+> ReDoc: `https://api-khansakirana.widiyanto.web.id/redoc`
 
 ---
 
@@ -717,7 +717,7 @@ Upload file gambar.
 { "url": "/static/products/products_1700000000_abc123.jpg" }
 ```
 
-File dapat diakses di: `https://api.khansakirana.my.id/static/products/products_1700000000_abc123.jpg`
+File dapat diakses di: `https://api-khansakirana.widiyanto.web.id/static/products/products_1700000000_abc123.jpg`
 
 ---
 
@@ -753,7 +753,7 @@ Hapus file yang sudah diupload.
 
 ## HTTPS & Deployment
 
-HTTPS ditangani oleh **Cloudflare Tunnel** — tidak perlu SSL certificate manual. Seluruh traffic dari `https://api.khansakirana.my.id` diteruskan secara aman melalui Cloudflare ke server lokal.
+HTTPS ditangani oleh **Cloudflare Tunnel** — tidak perlu SSL certificate manual. Seluruh traffic dari `https://api-khansakirana.widiyanto.web.id` diteruskan secara aman melalui Cloudflare ke server lokal.
 
 ```
 Internet → Cloudflare (HTTPS/TLS) → cloudflared tunnel → uvicorn :8001
