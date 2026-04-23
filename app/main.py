@@ -41,6 +41,351 @@ def _safe_order_by(value: str, allowed: set[str], default: str) -> str:
     return value if value in allowed else default
 
 
+_CATALOG_ISLAND_LABELS = {
+    "sumatera": "Sumatera",
+    "jawa": "Jawa",
+    "kalimantan": "Kalimantan",
+    "sulawesi": "Sulawesi",
+    "bali_nt": "Bali & Nusa Tenggara",
+    "maluku_papua": "Maluku & Papua",
+}
+
+_CATALOG_ISLAND_RANK = {
+    "jawa": 1,
+    "sumatera": 2,
+    "kalimantan": 3,
+    "sulawesi": 4,
+    "bali_nt": 5,
+    "maluku_papua": 6,
+}
+
+_CATALOG_PROVINCE_ISLAND_MAP = {
+    "aceh": "sumatera",
+    "sumatera utara": "sumatera",
+    "sumatera barat": "sumatera",
+    "riau": "sumatera",
+    "kepulauan riau": "sumatera",
+    "jambi": "sumatera",
+    "bengkulu": "sumatera",
+    "sumatera selatan": "sumatera",
+    "bangka belitung": "sumatera",
+    "lampung": "sumatera",
+    "banten": "jawa",
+    "dki jakarta": "jawa",
+    "jawa barat": "jawa",
+    "jawa tengah": "jawa",
+    "di yogyakarta": "jawa",
+    "jawa timur": "jawa",
+    "bali": "bali_nt",
+    "ntb": "bali_nt",
+    "ntt": "bali_nt",
+    "kalimantan barat": "kalimantan",
+    "kalimantan tengah": "kalimantan",
+    "kalimantan selatan": "kalimantan",
+    "kalimantan timur": "kalimantan",
+    "kalimantan utara": "kalimantan",
+    "sulawesi utara": "sulawesi",
+    "gorontalo": "sulawesi",
+    "sulawesi tengah": "sulawesi",
+    "sulawesi barat": "sulawesi",
+    "sulawesi selatan": "sulawesi",
+    "sulawesi tenggara": "sulawesi",
+    "maluku": "maluku_papua",
+    "maluku utara": "maluku_papua",
+    "papua barat": "maluku_papua",
+    "papua": "maluku_papua",
+}
+
+_HERO_IMAGES_CONTENT_KEY = "hero_images"
+_HERO_IMAGES_CONTENT_SECTION = "hero"
+_HERO_IMAGES_CONTENT_DESCRIPTION = "URL gambar hero/slideshow beranda"
+
+
+def _normalize_catalog_island_key(value: str | None) -> str:
+    sanitized = "_".join((value or "").strip().lower().split())
+    sanitized = sanitized.replace("-", "_")
+
+    if sanitized in {"", "all", "semua"}:
+        return ""
+    if sanitized == "java":
+        return "jawa"
+    if sanitized in {"bali_nusa", "bali_nusa_tenggara", "bali_nusatenggara", "bali_nt"}:
+        return "bali_nt"
+    if sanitized in {"papua", "maluku_papua", "maluku_papua_dan_sekitarnya"}:
+        return "maluku_papua"
+    return sanitized
+
+
+def _normalize_catalog_province_name(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _catalog_island_key_for_province(province_name: str | None) -> str:
+    return _CATALOG_PROVINCE_ISLAND_MAP.get(
+        _normalize_catalog_province_name(province_name),
+        "",
+    )
+
+
+def _catalog_price_from_product_price(value: Any) -> str:
+    try:
+        price = float(value or 0)
+    except (TypeError, ValueError):
+        return "Rp 125.000"
+
+    if price <= 0:
+        return "Rp 125.000"
+
+    return f"Rp {int(round(price)):,.0f}".replace(",", ".")
+
+
+def _load_catalog_province_rows(is_active: bool | None = None) -> list[dict[str, Any]]:
+    sql = (
+        "SELECT id, name, island_key, costume_name, description, image_url, price_from, is_active, sort_order, created_at, updated_at "
+        "FROM catalog_provinces WHERE 1=1"
+    )
+    params: list[Any] = []
+
+    if is_active is not None:
+        sql += " AND is_active=%s"
+        params.append(_bool_to_int(is_active))
+
+    sql += " ORDER BY sort_order ASC"
+
+    try:
+        return fetch_all(sql, tuple(params))
+    except Exception:
+        return []
+
+
+def _load_catalog_product_location_rows(is_active: bool = True) -> list[dict[str, Any]]:
+    sql = (
+        "SELECT province, traditional_name, name, image_url, price "
+        "FROM products WHERE province IS NOT NULL AND TRIM(province) <> ''"
+    )
+    params: list[Any] = []
+
+    if is_active:
+        sql += " AND is_available=1"
+
+    sql += " ORDER BY province ASC, updated_at DESC, created_at DESC"
+
+    try:
+        return fetch_all(sql, tuple(params))
+    except Exception:
+        return []
+
+
+def _catalog_province_payloads(is_active: bool | None = None) -> list[dict[str, Any]]:
+    province_map: dict[str, dict[str, Any]] = {}
+    now = _utc_now()
+
+    for row in _load_catalog_province_rows(is_active=is_active):
+        province_name = (row.get("name") or "").strip()
+        if not province_name:
+            continue
+
+        normalized_name = _normalize_catalog_province_name(province_name)
+        province_map[normalized_name] = {
+            **row,
+            "name": province_name,
+            "island_key": _normalize_catalog_island_key(
+                row.get("island_key") or _catalog_island_key_for_province(province_name)
+            ),
+            "costume_name": (row.get("costume_name") or "").strip(),
+            "description": (row.get("description") or "").strip(),
+            "price_from": (row.get("price_from") or "").strip(),
+        }
+
+    if is_active is not False:
+        for row in _load_catalog_product_location_rows(is_active=True):
+            province_name = (row.get("province") or "").strip()
+            if not province_name:
+                continue
+
+            normalized_name = _normalize_catalog_province_name(province_name)
+            island_key = _catalog_island_key_for_province(province_name)
+            if not island_key:
+                continue
+
+            costume_name = (row.get("traditional_name") or row.get("name") or "").strip()
+            image_url = (row.get("image_url") or "").strip() or None
+            price_from = _catalog_price_from_product_price(row.get("price"))
+
+            existing = province_map.get(normalized_name)
+            if existing is not None:
+                if not existing.get("island_key"):
+                    existing["island_key"] = island_key
+                if not existing.get("costume_name") and costume_name:
+                    existing["costume_name"] = costume_name
+                if not existing.get("image_url") and image_url:
+                    existing["image_url"] = image_url
+                if not existing.get("price_from"):
+                    existing["price_from"] = price_from
+                continue
+
+            province_map[normalized_name] = {
+                "id": f"fallback-{normalized_name.replace(' ', '-')}",
+                "name": province_name,
+                "island_key": island_key,
+                "costume_name": costume_name or province_name,
+                "description": "",
+                "image_url": image_url,
+                "price_from": price_from,
+                "is_active": 1,
+                "sort_order": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+
+    rows = [row for row in province_map.values() if row.get("island_key")]
+
+    rows.sort(
+        key=lambda row: (
+            _CATALOG_ISLAND_RANK.get(row.get("island_key") or "", 999),
+            0 if int(row.get("sort_order") or 0) > 0 else 1,
+            int(row.get("sort_order") or 0) if int(row.get("sort_order") or 0) > 0 else 9999,
+            _normalize_catalog_province_name(row.get("name")),
+        )
+    )
+
+    for index, row in enumerate(rows, start=1):
+        if int(row.get("sort_order") or 0) <= 0:
+            row["sort_order"] = index
+        if row.get("is_active") is None:
+            row["is_active"] = 1
+
+    return rows
+
+
+def _catalog_island_payloads() -> list[dict[str, Any]]:
+    island_map: dict[str, dict[str, Any]] = {}
+
+    try:
+        island_rows = fetch_all(
+            "SELECT id, `key`, name, sort_order FROM island_groups ORDER BY sort_order ASC"
+        )
+    except Exception:
+        island_rows = []
+
+    for row in island_rows:
+        island_key = _normalize_catalog_island_key(row.get("key") or row.get("name"))
+        if not island_key:
+            continue
+
+        island_map[island_key] = {
+            **row,
+            "key": island_key,
+            "name": _CATALOG_ISLAND_LABELS.get(
+                island_key,
+                (row.get("name") or island_key.replace("_", " ").title()),
+            ),
+        }
+
+    for province in _catalog_province_payloads(is_active=True):
+        island_key = province.get("island_key") or ""
+        if not island_key:
+            continue
+        if island_key not in island_map:
+            island_map[island_key] = {
+                "id": f"fallback-{island_key}",
+                "key": island_key,
+                "name": _CATALOG_ISLAND_LABELS.get(
+                    island_key,
+                    island_key.replace("_", " ").title(),
+                ),
+                "sort_order": _CATALOG_ISLAND_RANK.get(island_key, 999),
+            }
+
+    if not island_map:
+        for island_key, island_name in _CATALOG_ISLAND_LABELS.items():
+            island_map[island_key] = {
+                "id": f"fallback-{island_key}",
+                "key": island_key,
+                "name": island_name,
+                "sort_order": _CATALOG_ISLAND_RANK.get(island_key, 999),
+            }
+
+    rows = list(island_map.values())
+    rows.sort(
+        key=lambda row: (
+            int(row.get("sort_order") or _CATALOG_ISLAND_RANK.get(row.get("key") or "", 999)),
+            _CATALOG_ISLAND_RANK.get(row.get("key") or "", 999),
+            (row.get("name") or "").strip().lower(),
+        )
+    )
+    return rows
+
+
+def _get_primary_store_profile_id() -> str | None:
+    try:
+        row = fetch_one("SELECT id FROM store_profile ORDER BY created_at ASC LIMIT 1")
+    except Exception:
+        return None
+
+    if not row or not row.get("id"):
+        return None
+
+    return str(row["id"])
+
+
+def _get_site_content_value(content_key: str) -> str:
+    try:
+        row = fetch_one("SELECT value FROM site_content WHERE `key`=%s", (content_key,))
+    except Exception:
+        return ""
+
+    if not row:
+        return ""
+
+    return str(row.get("value") or "").strip()
+
+
+def _upsert_site_content_value(
+    content_key: str,
+    *,
+    section: str,
+    value: str,
+    description: str | None = None,
+) -> None:
+    try:
+        existing = fetch_one("SELECT id FROM site_content WHERE `key`=%s", (content_key,))
+        if existing:
+            if description is None:
+                execute(
+                    "UPDATE site_content SET section=%s, content_type=%s, value=%s, updated_at=UTC_TIMESTAMP() WHERE `key`=%s",
+                    (section, "text", value, content_key),
+                )
+            else:
+                execute(
+                    "UPDATE site_content SET section=%s, content_type=%s, value=%s, description=%s, updated_at=UTC_TIMESTAMP() WHERE `key`=%s",
+                    (section, "text", value, description, content_key),
+                )
+            return
+
+        execute(
+            "INSERT INTO site_content (id, `key`, section, content_type, value, description, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, UTC_TIMESTAMP())",
+            (str(uuid.uuid4()), content_key, section, "text", value, description),
+        )
+    except Exception:
+        return
+
+
+def _sync_store_profile_hero_images(value: str) -> None:
+    profile_id = _get_primary_store_profile_id()
+    if not profile_id:
+        return
+
+    try:
+        execute(
+            "UPDATE store_profile SET hero_images=%s, updated_at=UTC_TIMESTAMP() WHERE id=%s",
+            (value, profile_id),
+        )
+    except Exception:
+        return
+
+
 def _public_admin(admin_row: dict[str, Any]) -> dict[str, Any]:
     admin_row = dict(admin_row)
     admin_row.pop("password_hash", None)
@@ -319,6 +664,10 @@ def update_content(
     )
     if affected == 0:
         raise HTTPException(status_code=404, detail="Content not found")
+
+    if content_key == _HERO_IMAGES_CONTENT_KEY:
+        _sync_store_profile_hero_images(payload.value)
+
     return {"ok": True}
 
 
@@ -351,6 +700,9 @@ def create_content(
     )
     if not row:
         raise HTTPException(status_code=500, detail="Content created but cannot be loaded")
+
+    if payload.key == _HERO_IMAGES_CONTENT_KEY:
+        _sync_store_profile_hero_images(payload.value)
 
     return normalize_row(row)
 
@@ -394,6 +746,14 @@ def get_store_profile() -> dict[str, Any] | None:
     )
     if not row:
         return None
+
+    hero_images = str(row.get("hero_images") or "").strip()
+    if not hero_images:
+        legacy_hero_images = _get_site_content_value(_HERO_IMAGES_CONTENT_KEY)
+        if legacy_hero_images:
+            row = dict(row)
+            row["hero_images"] = legacy_hero_images
+
     return normalize_row(row)
 
 
@@ -436,6 +796,15 @@ def update_store_profile(
         f"UPDATE store_profile SET {', '.join(fields)} WHERE id=%s",
         tuple(params),
     )
+
+    if payload.hero_images is not None:
+        _upsert_site_content_value(
+            _HERO_IMAGES_CONTENT_KEY,
+            section=_HERO_IMAGES_CONTENT_SECTION,
+            value=payload.hero_images,
+            description=_HERO_IMAGES_CONTENT_DESCRIPTION,
+        )
+
     return {"ok": True}
 
 
@@ -1180,35 +1549,20 @@ class CatalogProvinceUpdateRequest(BaseModel):
 
 @app.get("/catalog/islands")
 def get_islands() -> list[dict[str, Any]]:
-    rows = fetch_all(
-        "SELECT id, `key`, name, sort_order FROM island_groups ORDER BY sort_order ASC"
-    )
+    rows = _catalog_island_payloads()
     return normalize_rows(rows)
 
 
 @app.get("/catalog/provinces")
 def list_catalog_provinces(is_active: bool | None = None) -> list[dict[str, Any]]:
-    sql = (
-        "SELECT id, name, island_key, costume_name, description, image_url, price_from, is_active, sort_order, created_at, updated_at "
-        "FROM catalog_provinces WHERE 1=1"
-    )
-    params: list[Any] = []
-
-    if is_active is not None:
-        sql += " AND is_active=%s"
-        params.append(_bool_to_int(is_active))
-
-    sql += " ORDER BY sort_order ASC"
-    rows = fetch_all(sql, tuple(params))
+    rows = _catalog_province_payloads(is_active=is_active)
     return normalize_rows(rows, bool_fields={"is_active"})
 
 
 @app.get("/catalog/provinces/names")
 def catalog_province_names() -> list[str]:
-    rows = fetch_all(
-        "SELECT name FROM catalog_provinces WHERE is_active=1 ORDER BY name ASC"
-    )
-    return [r["name"] for r in rows if r.get("name")]
+    rows = _catalog_province_payloads(is_active=True)
+    return [str(row["name"]) for row in rows if row.get("name")]
 
 
 @app.post("/catalog/provinces")
@@ -1217,6 +1571,7 @@ def create_catalog_province(
     _admin: dict[str, Any] = Depends(require_role({"super_admin", "admin"})),
 ) -> dict[str, Any]:
     prov_id = str(uuid.uuid4())
+    island_key = _normalize_catalog_island_key(payload.island_key) or _catalog_island_key_for_province(payload.name)
 
     execute(
         "INSERT INTO catalog_provinces (id, name, island_key, costume_name, description, image_url, price_from, is_active, sort_order, created_at, updated_at) "
@@ -1224,7 +1579,7 @@ def create_catalog_province(
         (
             prov_id,
             payload.name,
-            payload.island_key,
+            island_key,
             payload.costume_name,
             payload.description,
             payload.image_url,
@@ -1256,7 +1611,6 @@ def update_catalog_province(
 
     for column in [
         "name",
-        "island_key",
         "costume_name",
         "description",
         "image_url",
@@ -1267,6 +1621,10 @@ def update_catalog_province(
         if value is not None:
             fields.append(f"{column}=%s")
             params.append(value)
+
+    if payload.island_key is not None:
+        fields.append("island_key=%s")
+        params.append(_normalize_catalog_island_key(payload.island_key))
 
     if payload.is_active is not None:
         fields.append("is_active=%s")

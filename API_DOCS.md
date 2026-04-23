@@ -192,6 +192,8 @@ Ambil konten berdasarkan key.
 
 Update nilai konten.
 
+Jika `content_key=hero_images`, backend juga akan menyinkronkan nilai yang sama ke `store_profile.hero_images` agar deployment lama dan baru tetap kompatibel.
+
 **Request Body:**
 ```json
 { "value": "Nilai baru" }
@@ -202,6 +204,8 @@ Update nilai konten.
 ### `POST /content` 🔒 `admin`, `super_admin`
 
 Tambah konten baru.
+
+Jika `key=hero_images`, backend juga akan menyinkronkan nilai yang sama ke `store_profile.hero_images`.
 
 **Request Body:**
 ```json
@@ -246,10 +250,13 @@ Ambil profil toko.
   "facebook_url": null,
   "tiktok_url": null,
   "operational_hours": "08.00 - 20.00",
+  "hero_images": "https://.../hero-1.jpg,https://.../hero-2.jpg",
   "created_at": "...",
   "updated_at": "..."
 }
 ```
+
+Jika `store_profile.hero_images` kosong tetapi `site_content.hero_images` ada, backend akan mengembalikan nilai fallback dari `site_content`.
 
 ---
 
@@ -271,9 +278,12 @@ Update profil toko. Semua field opsional (hanya field yang dikirim yang diupdate
   "instagram_url": "https://instagram.com/...",
   "facebook_url": null,
   "tiktok_url": null,
-  "operational_hours": "08.00 - 20.00"
+  "operational_hours": "08.00 - 20.00",
+  "hero_images": "https://.../hero-1.jpg,https://.../hero-2.jpg"
 }
 ```
+
+Jika field `hero_images` dikirim, backend akan otomatis meng-upsert `site_content.hero_images` juga.
 
 ---
 
@@ -614,6 +624,8 @@ Hapus item galeri.
 
 Daftar grup pulau.
 
+Jika tabel `island_groups` kosong atau key pulau lama masih dipakai, backend akan menormalkan key dan membentuk fallback dari data provinsi/produk aktif.
+
 **Response:**
 ```json
 [
@@ -626,6 +638,8 @@ Daftar grup pulau.
 ### `GET /catalog/provinces`
 
 Daftar provinsi katalog pakaian adat.
+
+Jika tabel `catalog_provinces` kosong atau belum lengkap, backend akan membentuk fallback dari data produk aktif agar filter katalog tetap terisi.
 
 **Query Params:**
 | Param | Type | Deskripsi |
@@ -654,6 +668,8 @@ Daftar provinsi katalog pakaian adat.
 ### `GET /catalog/provinces/names`
 
 Daftar nama provinsi aktif saja.
+
+Endpoint ini memakai fallback yang sama dengan `GET /catalog/provinces`.
 
 **Response:** `["Jawa Tengah", "Jawa Barat", "Bali"]`
 
